@@ -1,3 +1,4 @@
+
 name: Tests and builds
 
 on:
@@ -11,6 +12,7 @@ permissions:
 jobs:
   offline-tests:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-15
@@ -21,17 +23,22 @@ jobs:
             arch: arm64
           - os: macos-26-intel
             arch: x86_64
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+
       - name: Configure parser tests
         run: cmake -S tests -B build/tests -DCMAKE_BUILD_TYPE=Release
+
       - name: Build and test
         run: |
           cmake --build build/tests --parallel 2
           ctest --test-dir build/tests --output-on-failure
+
       - name: Check scripts and pack
         run: |
           bash -n scripts/build.sh
@@ -40,8 +47,8 @@ jobs:
           python3 -c "import plistlib; plistlib.load(open('configs/dns.mobileconfig', 'rb'))"
 
   extension-build:
-    if: github.event_name == 'workflow_dispatch'
     needs: offline-tests
+
     strategy:
       fail-fast: false
       matrix:
@@ -50,23 +57,33 @@ jobs:
             architecture: arm64
           - runner: macos-15-intel
             architecture: x86_64
+          - runner: macos-26
+            architecture: arm64
+          - runner: macos-26-intel
+            architecture: x86_64
+
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+
     env:
       DNS_BUILD_JOBS: 3
       DNS_PACKAGE_ARCH: ${{ matrix.architecture }}
+
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+
       - name: Build against the pinned osquery SDK
-        run: ./scripts/build.sh
+        run: bash ./scripts/build.sh
+
       - name: Package binary and dependency licenses
         run: python3 scripts/package-binary.py --architecture "$DNS_PACKAGE_ARCH"
+
       - name: Upload binary archive and checksum
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: dns-events-macos-${{ matrix.architecture }}-${{ github.sha }}
+          name: dns-events-${{ matrix.runner }}-${{ matrix.architecture }}-${{ github.sha }}
           path: |
             build/dist/*.tar.gz
             build/dist/*.sha256
