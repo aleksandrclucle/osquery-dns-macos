@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadIdentifier</key>
+	<string>org.dnscollect.dns-logging</string>
+	<key>PayloadUUID</key>
+	<string>74D49473-B73C-40D8-82F1-B47F54300E74</string>
+	<key>PayloadDisplayName</key>
+	<string>DNS Events Logging</string>
+	<key>PayloadDescription</key>
+	<string>Configures Info logging and privacy options for the com.apple.mDNSResponder and com.apple.mdns subsystems.</string>
+	<key>PayloadScope</key>
+	<string>System</string>
+	<key>PayloadRemovalDisallowed</key>
+	<false/>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.system.logging</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>org.dnscollect.dns-logging.payload</string>
+			<key>PayloadUUID</key>
+			<string>C8D0642A-4C22-4AFD-9818-162EC1C8D03D</string>
+			<key>PayloadDisplayName</key>
+			<string>mDNSResponder Logging</string>
+			<key>Subsystems</key>
+			<dict>
+				<key>com.apple.mDNSResponder</key>
+				<dict>
+					<key>DEFAULT-OPTIONS</key>
+					<dict>
+						<key>Enable-Private-Data</key>
+						<true/>
+						<key>Privacy-Enable-Level</key>
+						<string>Sensitive</string>
+						<key>Level</key>
+						<dict>
+							<key>Enable</key>
+							<string>Info</string>
+							<key>Persist</key>
+							<string>Info</string>
+						</dict>
+					</dict>
+				</dict>
+				<key>com.apple.mdns</key>
+				<dict>
+					<key>DEFAULT-OPTIONS</key>
+					<dict>
+						<key>Enable-Private-Data</key>
+						<true/>
+						<key>Privacy-Enable-Level</key>
+						<string>Sensitive</string>
+						<key>Level</key>
+						<dict>
+							<key>Enable</key>
+							<string>Info</string>
+							<key>Persist</key>
+							<string>Info</string>
+						</dict>
+					</dict>
+				</dict>
+			</dict>
+			<key>PayloadDescription</key>
+			<string>Enables and persists Info messages for the configured DNS logging subsystems. Private-value availability depends on macOS.</string>
+		</dict>
+	</array>
+</dict>
+</plist>

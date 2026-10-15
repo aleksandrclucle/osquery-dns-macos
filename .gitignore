@@ -1,0 +1,11 @@
+.cache/
+build/
+.local/
+.DS_Store
+__pycache__/
+*.py[cod]
+*.ext
+*.log
+*.db
+*.db-*
+*.dSYM/

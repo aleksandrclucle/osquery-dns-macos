@@ -1,0 +1,16 @@
+{
+  "queries": {
+    "dns_events": {
+      "query": "SELECT * FROM dns_events;",
+      "interval": 300,
+      "removed": false,
+      "description": "Native EventSubscriber query; osquery advances a cursor for this scheduled query. Do not add a time window or LIMIT."
+    },
+    "dns_events_health": {
+      "query": "SELECT * FROM dns_events_status;",
+      "interval": 900,
+      "removed": false,
+      "description": "Stream state, queue usage, unsupported messages, losses and storage errors."
+    }
+  }
+}
