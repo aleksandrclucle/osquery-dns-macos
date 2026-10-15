@@ -3,6 +3,8 @@ name: Tests and builds
 
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -11,23 +13,20 @@ permissions:
 
 jobs:
   offline-tests:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
-          - os: macos-26
-            arch: arm64
-          - os: macos-26-intel
-            arch: x86_64
-
-    runs-on: ${{ matrix.os }}
+        os:
+          - macos-15
+          - macos-15-intel
+          - macos-26
+          - macos-26-intel
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
 
@@ -42,49 +41,60 @@ jobs:
       - name: Check scripts and pack
         run: |
           bash -n scripts/build.sh
-          python3 -m py_compile scripts/patch-sdk.py scripts/package-binary.py tests/integration.py tests/live_support.py
+          python3 -m py_compile \
+            scripts/patch-sdk.py \
+            scripts/package-binary.py \
+            tests/integration.py \
+            tests/live_support.py
           python3 -m json.tool configs/dns-events.pack.json > /dev/null
           python3 -c "import plistlib; plistlib.load(open('configs/dns.mobileconfig', 'rb'))"
 
   extension-build:
+    name: Build (${{ matrix.os }}, ${{ matrix.arch }})
     needs: offline-tests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
-            architecture: arm64
-          - runner: macos-15-intel
-            architecture: x86_64
-          - runner: macos-26
-            architecture: arm64
-          - runner: macos-26-intel
-            architecture: x86_64
-
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+          - os: macos-26
+            arch: arm64
+          - os: macos-26-intel
+            arch: x86_64
 
     env:
       DNS_BUILD_JOBS: 3
-      DNS_PACKAGE_ARCH: ${{ matrix.architecture }}
 
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
 
-      - name: Build against the pinned osquery SDK
+      - name: Build extension
         run: bash ./scripts/build.sh
 
-      - name: Package binary and dependency licenses
-        run: python3 scripts/package-binary.py --architecture "$DNS_PACKAGE_ARCH"
+      - name: Validate architecture
+        run: |
+          test "$(lipo -archs build/dns_events.ext)" = "${{ matrix.arch }}"
+          codesign --verify build/dns_events.ext
 
-      - name: Upload binary archive and checksum
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Package extension
+        run: |
+          python3 scripts/package-binary.py \
+            --architecture "${{ matrix.arch }}"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: dns-events-${{ matrix.runner }}-${{ matrix.architecture }}-${{ github.sha }}
+          name: dns-events-${{ matrix.os }}-${{ matrix.arch }}-${{ github.sha }}
           path: |
+            build/dns_events.ext
             build/dist/*.tar.gz
             build/dist/*.sha256
           if-no-files-found: error
