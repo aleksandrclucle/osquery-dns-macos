@@ -132,7 +132,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh release create "$RELEASE_TAG" dist/* \
-            --verify-tag \
-            --generate-notes \
-            --title "$RELEASE_TAG"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release exists, uploading assets"
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* \
+              --verify-tag \
+              --generate-notes \
+              --title "$RELEASE_TAG"
+          fi
