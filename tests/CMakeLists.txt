@@ -11,6 +11,14 @@ target_compile_options(dns_parser_tests PRIVATE -UNDEBUG)
 target_include_directories(dns_parser_tests PRIVATE ../src)
 add_test(NAME parser COMMAND dns_parser_tests)
 
+add_executable(dns_host_settings_tests host_settings_test.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(dns_host_settings_tests PRIVATE Threads::Threads)
+target_compile_features(dns_host_settings_tests PRIVATE cxx_std_17)
+target_compile_options(dns_host_settings_tests PRIVATE -UNDEBUG)
+target_include_directories(dns_host_settings_tests PRIVATE ../src)
+add_test(NAME host_settings COMMAND dns_host_settings_tests)
+
 find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
 add_test(NAME integration_helpers
   COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test_integration_helpers.py")

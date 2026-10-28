@@ -23,7 +23,7 @@ Output: `build/dns_events.ext`, with an ad-hoc signature. The script downloads t
 
 Add the absolute path to `dns_events.ext` to your existing osquery extension autoload list. The executable must have safe, root-owned permissions, and events must be enabled with `--disable_events=false`. Use the [osquery extension documentation](https://osquery.readthedocs.io/en/stable/deployment/extensions/) for deployment requirements.
 
-The included [query pack](configs/dns-events.pack.json) collects events every 30 seconds and checks collector status every 60 seconds. Keep event optimization enabled for scheduled collection; see [storage and cursors](docs/implementation.md#storage-and-sql).
+The included [query pack](configs/dns-events.pack.json) collects events every 5 minutes and checks collector status every 15 minutes. Keep event optimization enabled for scheduled collection; see [storage and cursors](docs/implementation.md#storage-and-sql).
 
 ## Logging profile
 

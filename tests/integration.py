@@ -91,6 +91,9 @@ def run_test(options, state, daemon, shell, extension):
     (state / "osquery.conf").write_text(json.dumps(config))
     command = [daemon, "--flagfile=/dev/null", "--allow_unsafe=true",
                "--disable_events=false", "--disable_extensions=false",
+               # Registration precedes config loading. The extension must use
+               # the later events_optimize=true option before its first read.
+               "--events_optimize=false",
                "--disable_watchdog=false", "--enable_extensions_watchdog=true",
                "--extensions_timeout=3", "--extensions_require=dns_events",
                "--schedule_splay_percent=0", "--config_plugin=filesystem",

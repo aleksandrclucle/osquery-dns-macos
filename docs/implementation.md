@@ -36,11 +36,17 @@ The extension uses real osquery `EventPublisher` and `EventSubscriber` classes. 
 
 Event rows are stored in the host osqueryd database through the SDK database proxy. For a SELECT, osquery executes SQL and calls the extension table. The extension reads its subscriber's rows through SDK RPC and returns them to osquery. Both processes use CPU and memory; mDNSResponder and logd also perform system logging work.
 
-The standard EventSubscriber manages expiry, string event IDs, and separate cursors for scheduled queries. The extension copies event flags from the host at startup. Its `shouldOptimize()` override uses the host's `events_optimize` value because the SDK otherwise distinguishes an extension from a daemon. The SDK cursor algorithm is unchanged.
+The standard EventSubscriber manages expiry, string event IDs, and separate cursors for scheduled queries. Before each table read and storage batch, the extension fetches the host's current `disable_events`, `events_optimize`, `events_expiry`, and `events_max` values. Each operation uses its own immutable snapshot; a read keeps that snapshot until the SDK has updated its cursor, while ingestion can continue on its own thread. This covers options loaded after extension registration as well as later configuration refreshes. If the host options cannot be read or validated, the table call fails before reading events or advancing its cursor. It does not fall back to unoptimized history. The SDK cursor algorithm is unchanged.
+
+The source checks `disable_events` once per second, with a bounded RPC timeout. Disabling stops the subscription after that check; enabling starts a new subscription and resets correlation. Events during the disabled interval are not recovered. Already accepted rows drain normally. The local EventFactory remains available while collection is disabled.
 
 Keep the scheduled delivery query as `SELECT * FROM dns_events;`. Adding SQL filters or LIMIT can discard rows after the event cursor has advanced. For diagnostic history, use an explicit `time` constraint, such as `WHERE time > 0`; this avoids advancing the scheduled cursor.
 
-Set `events_expiry` to at least three times the longest DNS schedule interval. In the pinned SDK, `events_max` limits time batches rather than imposing a strict maximum number of DNS rows. Stored events and cursors survive extension restarts, subject to retention and the host database lifecycle.
+Set `events_expiry` to at least three times the longest DNS schedule interval. A separate background refresh reads `osquery_schedule` and asks the host SQL compiler which queries use `dns_events`. The extension applies the standard minimum retention calculation: three times the longest interval, rounded up to the next minute. Schedule refreshes run outside table reads to avoid a host SQL lock dependency. They normally take effect within one second; a failed refresh retains the previous floor and is reported in status. Startup expiry and overflow cleanup are deferred until the host reports a valid loaded configuration and the first schedule snapshot is available, so temporary command-line values cannot delete retained history before config loading. The SDK's private query-count bookkeeping is not exposed to external subscribers, so cleanup timing can differ from a core subscriber; the retention floor and per-query cursors still apply.
+
+In the pinned SDK, `events_max` limits time batches rather than imposing a strict maximum number of DNS rows. Stored events and cursors survive extension restarts, subject to retention and the host database lifecycle. Keep distinct schedule names for independent delivery queries. Changing `events_optimize` to false explicitly disables incremental reads; changing it back uses the last saved SDK cursor, as for a core event table.
+
+Other daemon settings have different owners. The host controls schedule execution, result formatting, logger selection and delivery, database configuration, and configuration refresh. The extension does not copy or reapply those settings. Extension process arguments, its manager socket and SDK initialization require a process restart to change. The host's `events.enable_subscribers` and `events.disable_subscribers` lists address its own EventFactory; they do not manage this external subscriber. Use `disable_events` to pause this collector or remove its autoload entry and restart the daemon to unload it. The extension never calls `Config::update`, which would write configuration back to the host.
 
 ## Main fields
 
@@ -71,7 +77,7 @@ The source uses the private `OSLogEventLiveStream` API in LoggingSupport. Requir
 
 The queue holds at most 8192 messages and 16 MiB of payload. The parser accepts messages up to 8 KiB, RDATA up to 4 KiB, and 4096 correlation contexts with a 10-minute TTL. Writes are batched at up to 128 events or a 500 ms flush interval. These bounds do not cap total RSS because SQL responses materialize rows.
 
-`dns_events_status` reports queue drops, source loss notices, unsupported messages, correlation evictions, write failures, and source restarts. `stream_pid` is the extension PID while its source is active. `stream_running=1` means the subscription was activated; verify a fresh answer to establish that events actually arrive. `last_error` retains the latest recorded error and is not cleared by recovery.
+`dns_events_status` reports queue drops, source loss notices, unsupported messages, correlation evictions, write failures, and source restarts. Its `disable_events`, `events_optimize`, `events_expiry`, and `events_max` fields show the latest retrieved host values. `stream_pid` is the extension PID while its source is active. `stream_running=1` means the subscription was activated; verify a fresh answer to establish that events actually arrive. `last_error` retains the latest recorded error and is not cleared by recovery.
 
 `scheduled_reads` counts table calls without a `time` constraint, including manual queries. `historical_reads` counts calls with a `time` constraint. They describe the read path, not the caller's identity. Status counters reset when the extension process restarts. If `unsupported_messages` rises while `received_events` stays zero, the collector is receiving log messages but their format is not supported by the parser. An `osqueryi` session configured to load this extension with events enabled starts a separate collector; use a connection to the daemon socket when diagnosing the running daemon.
 
@@ -81,7 +87,8 @@ The source reconnects with a delay that grows from 1 to 30 seconds and resets co
 
 | File | Purpose |
 |---|---|
-| `src/main.cpp` | Registration, host flag import, and EventFactory lifecycle |
+| `src/main.cpp` | Registration and EventFactory lifecycle |
+| `src/host_settings.h` | Complete, validated snapshots of host event options |
 | `src/native_stream.mm` | Private live-log subscription and callback lifetime |
 | `src/parser.cpp` | Message parsing and correlation |
 | `src/events.cpp` | Queue, publisher, subscriber, SQL adapter, and status |

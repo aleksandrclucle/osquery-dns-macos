@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include "host_settings.h"
 #include "parser.h"
 #include <atomic>
 #include <condition_variable>
@@ -23,9 +24,11 @@ struct DNSHealth {
   void increment(const std::string &, std::uint64_t n = 1);
   void set(const std::string &, std::uint64_t);
   void error(const std::string &);
+  void settings(const dns::HostSettings &);
   Row row();
 };
 DNSHealth &dnsHealth();
+dns::HostSettings readHostSettings();
 
 class DNSPublisher final
     : public EventPublisher<DNSSubscriptionContext, DNSContext> {
@@ -62,6 +65,16 @@ public:
   // ToolType::EXTENSION is not a daemon. Use the core's executing-query
   // context and the native EventSubscriber optimization in this process too.
   bool shouldOptimize() const override;
+  void generateRows(RowYield &, QueryContext &);
+  void refreshSchedule();
+  bool configurationReady() const { return schedule_ready_; }
+
+private:
+  size_t getEventsExpiry() override;
+  size_t getEventBatchesMax() override;
+  std::map<std::string, std::pair<std::string, std::uint64_t>> schedule_;
+  std::atomic<bool> schedule_ready_{false};
+  std::atomic<std::size_t> min_expiry_{0};
 };
 
 class DNSTable final : public TablePlugin {
@@ -73,6 +86,7 @@ public:
   bool usesGenerator() const override { return true; }
   void generator(RowYield &, QueryContext &) override;
   TableRows generate(QueryContext &) override;
+  Status call(const PluginRequest &, PluginResponse &) override;
 };
 class DNSStatusTable final : public TablePlugin {
 public:
