@@ -24,7 +24,7 @@ int main(int argc, char *argv[]) {
   using namespace osquery;
   Initializer runner(argc, argv, ToolType::EXTENSION);
   // The SDK reports its build version; no unverified host minimum is declared.
-  auto status = startExtension("dns_events", "0.3.3");
+  auto status = startExtension("dns_events", "0.3.4");
   if (!status.ok()) {
     LOG(ERROR) << status.getMessage();
     return runner.shutdown(status.getCode());

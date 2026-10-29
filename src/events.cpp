@@ -10,6 +10,7 @@
 #include <osquery/sql/dynamic_table_row.h>
 #include <osquery/utils/system/time.h>
 #include <thread>
+#include <thrift/transport/TTransportException.h>
 #include <unistd.h>
 
 namespace osquery {
@@ -28,7 +29,10 @@ const std::vector<std::string> healthKeys = {
     "subscriber_active",    "scheduled_reads",
     "historical_reads",     "stream_queue_drops",
     "stream_queue_bytes",   "peak_stream_queue_bytes",
-    "disable_events",       "events_optimize"};
+    "disable_events",       "events_optimize",
+    "schedule_ready",       "schedule_refresh_ok",
+    "schedule_refresh_errors", "schedule_last_success_time",
+    "schedule_last_error_time"};
 } // namespace
 
 DNSHealth &dnsHealth() {
@@ -70,6 +74,20 @@ void DNSHealth::error(const std::string &e) {
   std::lock_guard<std::mutex> l(mutex);
   last_error = e.substr(0, 512);
 }
+void DNSHealth::scheduleRefresh(bool succeeded, const std::string &error) {
+  std::lock_guard<std::mutex> lock(mutex);
+  counters["schedule_refresh_ok"] = succeeded;
+  if (succeeded) {
+    counters["schedule_ready"] = 1;
+    counters["schedule_last_success_time"] = getUnixTime();
+    schedule_last_error.clear();
+  } else if (!error.empty()) {
+    ++counters["schedule_refresh_errors"];
+    counters["schedule_last_error_time"] = getUnixTime();
+    schedule_last_error = error;
+    last_error = error;
+  }
+}
 Row DNSHealth::row() {
   std::lock_guard<std::mutex> l(mutex);
   Row r;
@@ -77,6 +95,7 @@ Row DNSHealth::row() {
     r[k] = std::to_string(counters[k]);
   }
   r["last_error"] = last_error;
+  r["schedule_last_error"] = schedule_last_error;
   r["events_expiry"] = std::to_string(counters["events_expiry"]);
   r["events_max"] = std::to_string(counters["events_max"]);
   r["framework"] = "osquery EventPublisher/EventSubscriber";
@@ -159,6 +178,8 @@ void DNSPublisher::readLoop() {
   bool disabled = true;
   bool configuration_ready = false;
   auto refresh_at = dns::Clock::time_point{};
+  auto schedule_refresh_at = dns::Clock::time_point{};
+  unsigned int schedule_backoff = 1;
   while (!isEnding()) {
     const auto now = dns::Clock::now();
     if (now >= refresh_at) {
@@ -168,15 +189,40 @@ void DNSPublisher::readLoop() {
         disabled = true;
         dnsHealth().error("Cannot refresh host event configuration");
       }
-      try {
-        auto subscriber = std::dynamic_pointer_cast<DNSSubscriber>(
-            EventFactory::getEventSubscriber("dns_events"));
-        if (subscriber) {
-          subscriber->refreshSchedule();
-          configuration_ready = subscriber->configurationReady();
+      if (dns::Clock::now() >= schedule_refresh_at) {
+        std::string schedule_error;
+        try {
+          auto subscriber = std::dynamic_pointer_cast<DNSSubscriber>(
+              EventFactory::getEventSubscriber("dns_events"));
+          const bool refreshed = subscriber && subscriber->refreshSchedule();
+          dnsHealth().scheduleRefresh(refreshed);
+          if (subscriber) {
+            configuration_ready = subscriber->configurationReady();
+          }
+          if (refreshed) {
+            schedule_backoff = 1;
+          }
+          schedule_refresh_at = dns::Clock::now() + std::chrono::seconds(1);
+        } catch (const apache::thrift::transport::TTransportException &error) {
+          schedule_error =
+              error.getType() ==
+                      apache::thrift::transport::TTransportException::TIMED_OUT
+                  ? "Host event schedule RPC timed out"
+                  : "Host event schedule transport failed";
+        } catch (const std::out_of_range &) {
+          schedule_error = "Host event schedule response is incomplete";
+        } catch (const std::exception &) {
+          schedule_error = "Cannot refresh host event schedule";
         }
-      } catch (const std::exception &) {
-        dnsHealth().error("Cannot refresh host event schedule");
+        if (!schedule_error.empty()) {
+          dnsHealth().scheduleRefresh(false, schedule_error);
+          // A client timeout does not cancel the host's pending query. Avoid
+          // piling up retries while an unrelated scheduled query holds the
+          // host schedule lock. Host option checks keep their own cadence.
+          schedule_refresh_at =
+              dns::Clock::now() + std::chrono::seconds(schedule_backoff);
+          schedule_backoff = std::min(30U, schedule_backoff * 2);
+        }
       }
       refresh_at = dns::Clock::now() + std::chrono::seconds(1);
     }
@@ -324,7 +370,7 @@ void DNSSubscriber::generateRows(RowYield &yield, QueryContext &context) {
   genTable(yield, context);
 }
 
-void DNSSubscriber::refreshSchedule() {
+bool DNSSubscriber::refreshSchedule() {
   // Run SQL RPC on the reader thread, outside a table callback: the host can
   // already be waiting for a DNS table response on its SQL connection.
   ExtensionManagerClient client(FLAGS_extensions_socket, 2);
@@ -337,7 +383,7 @@ void DNSSubscriber::refreshSchedule() {
     throw std::runtime_error("Cannot read the host event schedule");
   }
   if (rows.empty() || rows.front().at("config_valid") != "1") {
-    return;
+    return false;
   }
   decltype(schedule_) schedule;
   for (const auto &row : rows) {
@@ -349,7 +395,7 @@ void DNSSubscriber::refreshSchedule() {
                                     dns::unsignedSetting(row.at("interval"))));
   }
   if (schedule_ready_ && schedule == schedule_) {
-    return;
+    return true;
   }
 
   std::size_t query_count = 0;
@@ -380,6 +426,7 @@ void DNSSubscriber::refreshSchedule() {
   min_expiry_ = min_expiry;
   schedule_ = std::move(schedule);
   schedule_ready_ = true;
+  return true;
 }
 TableColumns DNSTable::columns() const {
   TableColumns cols;
@@ -436,7 +483,8 @@ TableColumns DNSStatusTable::columns() const {
   for (const auto *k : {"events_expiry", "events_max"}) {
     cols.push_back({k, BIGINT_TYPE, ColumnOptions::DEFAULT});
   }
-  for (const auto *k : {"last_error", "framework", "stream_backend"}) {
+  for (const auto *k :
+       {"last_error", "schedule_last_error", "framework", "stream_backend"}) {
     cols.push_back({k, TEXT_TYPE, ColumnOptions::DEFAULT});
   }
   return cols;
