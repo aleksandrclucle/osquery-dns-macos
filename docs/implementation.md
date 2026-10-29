@@ -42,7 +42,9 @@ The source checks `disable_events` once per second, with a bounded RPC timeout. 
 
 Keep the scheduled delivery query as `SELECT * FROM dns_events;`. Adding SQL filters or LIMIT can discard rows after the event cursor has advanced. For diagnostic history, use an explicit `time` constraint, such as `WHERE time > 0`; this avoids advancing the scheduled cursor.
 
-Set `events_expiry` to at least three times the longest DNS schedule interval. A separate background refresh reads `osquery_schedule` and asks the host SQL compiler which queries use `dns_events`. The extension applies the standard minimum retention calculation: three times the longest interval, rounded up to the next minute. Schedule refreshes run outside table reads to avoid a host SQL lock dependency. They normally take effect within one second; a failed refresh retains the previous floor and is reported in status. Startup expiry and overflow cleanup are deferred until the host reports a valid loaded configuration and the first schedule snapshot is available, so temporary command-line values cannot delete retained history before config loading. The SDK's private query-count bookkeeping is not exposed to external subscribers, so cleanup timing can differ from a core subscriber; the retention floor and per-query cursors still apply.
+Set `events_expiry` to at least three times the longest DNS schedule interval. A separate background refresh reads `osquery_schedule` and asks the host SQL compiler which queries use `dns_events`. The extension applies the standard minimum retention calculation: three times the longest interval, rounded up to the next minute. Schedule refreshes run outside table reads to avoid a host SQL lock dependency. Startup expiry and overflow cleanup are deferred until the host reports a valid loaded configuration and the first schedule snapshot is available, so temporary command-line values cannot delete retained history before config loading. The SDK's private query-count bookkeeping is not exposed to external subscribers, so cleanup timing can differ from a core subscriber; the retention floor and per-query cursors still apply.
+
+Successful schedule refreshes use a one-second interval and a two-second RPC timeout. The host holds its schedule mutex while running scheduled queries, so a slow query can delay `osquery_schedule` long enough to time out. A failed refresh retains the last valid retention floor and leaves collection running if a valid snapshot was already obtained. Retries wait 1, 2, 4, 8, 16, then at most 30 seconds between attempts. A valid snapshot, including an unchanged schedule, resets this delay and clears the current schedule error. Waiting for a valid host configuration does not count as a refresh error or a successful snapshot. Schedule retry delays do not change the host-options refresh interval.
 
 In the pinned SDK, `events_max` limits time batches rather than imposing a strict maximum number of DNS rows. Stored events and cursors survive extension restarts, subject to retention and the host database lifecycle. Keep distinct schedule names for independent delivery queries. Changing `events_optimize` to false explicitly disables incremental reads; changing it back uses the last saved SDK cursor, as for a core event table.
 
@@ -78,6 +80,30 @@ The source uses the private `OSLogEventLiveStream` API in LoggingSupport. Requir
 The queue holds at most 8192 messages and 16 MiB of payload. The parser accepts messages up to 8 KiB, RDATA up to 4 KiB, and 4096 correlation contexts with a 10-minute TTL. Writes are batched at up to 128 events or a 500 ms flush interval. These bounds do not cap total RSS because SQL responses materialize rows.
 
 `dns_events_status` reports queue drops, source loss notices, unsupported messages, correlation evictions, write failures, and source restarts. Its `disable_events`, `events_optimize`, `events_expiry`, and `events_max` fields show the latest retrieved host values. `stream_pid` is the extension PID while its source is active. `stream_running=1` means the subscription was activated; verify a fresh answer to establish that events actually arrive. `last_error` retains the latest recorded error and is not cleared by recovery.
+
+Schedule health has separate fields so a past refresh failure can be distinguished from the current state:
+
+| Field | Meaning |
+|---|---|
+| `schedule_ready` | `1` after the first valid schedule snapshot; remains `1` while a later refresh is pending or failing |
+| `schedule_refresh_ok` | `1` when the latest attempt obtained a valid snapshot, including an unchanged schedule; `0` after a failed attempt or while waiting for valid configuration |
+| `schedule_refresh_errors` | Cumulative number of failed schedule refreshes since extension startup |
+| `schedule_last_success_time` | UNIX time of the latest valid snapshot, or `0` before the first success |
+| `schedule_last_error_time` | UNIX time of the latest refresh failure, or `0` before the first failure; retained after recovery |
+| `schedule_last_error` | Current schedule refresh error; cleared only after a valid successful snapshot |
+
+For a focused check against the running daemon, use:
+
+```sql
+SELECT stream_running, received_events, stored_events,
+       schedule_ready, schedule_refresh_ok, schedule_refresh_errors,
+       schedule_last_success_time, schedule_last_error_time,
+       schedule_last_error, write_errors, write_drops,
+       stream_queue_drops, loss_notices
+FROM dns_events_status;
+```
+
+A nonzero `schedule_refresh_errors` or a historical `last_error` alone does not establish DNS event loss. After recovery, `schedule_refresh_ok=1`, `schedule_last_error` is empty, and the failure count and error timestamp remain available. An ongoing failure means that the retention-floor snapshot may be stale; inspect the host's slow scheduled queries and check the source, queue, and write diagnostics separately.
 
 `scheduled_reads` counts table calls without a `time` constraint, including manual queries. `historical_reads` counts calls with a `time` constraint. They describe the read path, not the caller's identity. Status counters reset when the extension process restarts. If `unsupported_messages` rises while `received_events` stays zero, the collector is receiving log messages but their format is not supported by the parser. An `osqueryi` session configured to load this extension with events enabled starts a separate collector; use a connection to the daemon socket when diagnosing the running daemon.
 
@@ -122,3 +148,5 @@ python3 tests/integration.py --requests 1000
 It uses an isolated daemon and database to check DNS correlation, independent schedule cursors, extension recovery and persistence. Masked values are accepted by default; `--require-unredacted` requires readable names. See `--help` for binary paths and temporary-state options. Live tests require macOS log access and resolution of `example.com`. They do not install a profile or restart the system service. Diagnostic files are retained in a temporary directory by default and can contain DNS activity.
 
 Set `DNS_ENABLE_LIVE_TESTS=ON` in the test CMake configuration to include the native-source lifecycle test.
+
+To exercise schedule RPC contention and recovery with a deliberately slow query, run `python3 tests/schedule_integration.py`. It uses a separate daemon and database, checks configuration updates and independent delivery cursors, and removes its temporary state after shutdown. It does not modify the system service.

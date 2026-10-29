@@ -21,10 +21,12 @@ struct DNSHealth {
   std::mutex mutex;
   std::map<std::string, std::uint64_t> counters;
   std::string last_error;
+  std::string schedule_last_error;
   void increment(const std::string &, std::uint64_t n = 1);
   void set(const std::string &, std::uint64_t);
   void error(const std::string &);
   void settings(const dns::HostSettings &);
+  void scheduleRefresh(bool succeeded, const std::string &error = {});
   Row row();
 };
 DNSHealth &dnsHealth();
@@ -66,7 +68,7 @@ public:
   // context and the native EventSubscriber optimization in this process too.
   bool shouldOptimize() const override;
   void generateRows(RowYield &, QueryContext &);
-  void refreshSchedule();
+  bool refreshSchedule();
   bool configurationReady() const { return schedule_ready_; }
 
 private:
